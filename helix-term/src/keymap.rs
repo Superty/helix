@@ -3,6 +3,7 @@ pub mod macros;
 
 pub use crate::commands::MappableCommand;
 use crate::config::Config;
+use anyhow::bail;
 use arc_swap::{
     access::{DynAccess, DynGuard},
     ArcSwap,
@@ -12,6 +13,7 @@ use serde::Deserialize;
 use std::{
     borrow::Cow,
     collections::{BTreeSet, HashMap},
+    fmt::{self, Display},
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -324,8 +326,54 @@ impl Default for Keymap {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum KeyMode {
+    Mode(Mode),
+}
+
+impl Display for KeyMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            KeyMode::Mode(m) => f.write_str(&m.to_string()),
+        }
+    }
+}
+
+impl std::str::FromStr for KeyMode {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "normal" => Ok(KeyMode::Mode(Mode::Normal)),
+            "select" => Ok(KeyMode::Mode(Mode::Select)),
+            "insert" => Ok(KeyMode::Mode(Mode::Insert)),
+            _ => bail!("Invalid mode '{}'", s),
+        }
+    }
+}
+
+// toml deserializer doesn't seem to recognize string as enum
+impl<'de> Deserialize<'de> for KeyMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl serde::Serialize for KeyMode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
 pub struct Keymaps {
-    pub map: Box<dyn DynAccess<HashMap<Mode, Keymap>>>,
+    pub map: Box<dyn DynAccess<HashMap<KeyMode, Keymap>>>,
     /// Stores pending keys waiting for the next key. This is relative to a
     /// sticky node if one is in use.
     state: Vec<KeyEvent>,
@@ -334,7 +382,7 @@ pub struct Keymaps {
 }
 
 impl Keymaps {
-    pub fn new(map: Box<dyn DynAccess<HashMap<Mode, Keymap>>>) -> Self {
+    pub fn new(map: Box<dyn DynAccess<HashMap<KeyMode, Keymap>>>) -> Self {
         Self {
             map,
             state: Vec::new(),
@@ -342,7 +390,7 @@ impl Keymaps {
         }
     }
 
-    pub fn map(&self) -> DynGuard<HashMap<Mode, Keymap>> {
+    pub fn map(&self) -> DynGuard<HashMap<KeyMode, Keymap>> {
         self.map.load()
     }
 
@@ -358,7 +406,7 @@ impl Keymaps {
     /// Lookup `key` in the keymap to try and find a command to execute. Escape
     /// key cancels pending keystrokes. If there are no pending keystrokes but a
     /// sticky node is in use, it will be cleared.
-    pub fn get(&mut self, mode: Mode, key: KeyEvent) -> KeymapResult {
+    pub fn get(&mut self, mode: KeyMode, key: KeyEvent) -> KeymapResult {
         // TODO: remove the sticky part and look up manually
         let keymaps = &*self.map();
         let keymap = &keymaps[&mode];
@@ -451,7 +499,7 @@ mod tests {
     fn merge_partial_keys() {
         let config = Config {
             keys: hashmap! {
-                Mode::Normal => Keymap::new(
+                KeyMode::Mode(Mode::Normal) => Keymap::new(
                     keymap!({ "Normal mode"
                         "i" => normal_mode,
                         "无" => insert_mode,
@@ -470,23 +518,26 @@ mod tests {
 
         let mut keymap = Keymaps::new(Box::new(Constant(merged_config.keys.clone())));
         assert_eq!(
-            keymap.get(Mode::Normal, key!('i')),
+            keymap.get(KeyMode::Mode(Mode::Normal), key!('i')),
             KeymapResult::Matched(MappableCommand::normal_mode),
             "Leaf should replace leaf"
         );
         assert_eq!(
-            keymap.get(Mode::Normal, key!('无')),
+            keymap.get(KeyMode::Mode(Mode::Normal), key!('无')),
             KeymapResult::Matched(MappableCommand::insert_mode),
             "New leaf should be present in merged keymap"
         );
         // Assumes that z is a node in the default keymap
         assert_eq!(
-            keymap.get(Mode::Normal, key!('z')),
+            keymap.get(KeyMode::Mode(Mode::Normal), key!('z')),
             KeymapResult::Matched(MappableCommand::jump_backward),
             "Leaf should replace node"
         );
 
-        let keymap = merged_config.keys.get_mut(&Mode::Normal).unwrap();
+        let keymap = merged_config
+            .keys
+            .get_mut(&KeyMode::Mode(Mode::Normal))
+            .unwrap();
         // Assumes that `g` is a node in default keymap
         assert_eq!(
             keymap.root().search(&[key!('g'), key!('$')]).unwrap(),
@@ -506,15 +557,29 @@ mod tests {
             "Old leaves in subnode should be present in merged node"
         );
 
-        assert!(merged_config.keys.get(&Mode::Normal).unwrap().len() > 1);
-        assert!(merged_config.keys.get(&Mode::Insert).unwrap().len() > 0);
+        assert!(
+            merged_config
+                .keys
+                .get(&KeyMode::Mode(Mode::Normal))
+                .unwrap()
+                .len()
+                > 1
+        );
+        assert!(
+            merged_config
+                .keys
+                .get(&KeyMode::Mode(Mode::Insert))
+                .unwrap()
+                .len()
+                > 0
+        );
     }
 
     #[test]
     fn order_should_be_set() {
         let config = Config {
             keys: hashmap! {
-                Mode::Normal => Keymap::new(
+                KeyMode::Mode(Mode::Normal) => Keymap::new(
                     keymap!({ "Normal mode"
                         "space" => { ""
                             "s" => { ""
@@ -529,7 +594,10 @@ mod tests {
         };
         let mut merged_config = merge_keys(config.clone());
         assert_ne!(config, merged_config);
-        let keymap = merged_config.keys.get_mut(&Mode::Normal).unwrap();
+        let keymap = merged_config
+            .keys
+            .get_mut(&KeyMode::Mode(Mode::Normal))
+            .unwrap();
         // Make sure mapping works
         assert_eq!(
             keymap
@@ -547,7 +615,7 @@ mod tests {
     #[test]
     fn aliased_modes_are_same_in_default_keymap() {
         let keymaps = Keymaps::default().map();
-        let root = keymaps.get(&Mode::Normal).unwrap().root();
+        let root = keymaps.get(&KeyMode::Mode(Mode::Normal)).unwrap().root();
         assert_eq!(
             root.search(&[key!(' '), key!('w')]).unwrap(),
             root.search(&["C-w".parse::<KeyEvent>().unwrap()]).unwrap(),

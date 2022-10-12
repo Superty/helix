@@ -1,5 +1,5 @@
+use crate::keymap::KeyMode;
 use crate::keymap::{default::default, merge_keys, Keymap};
-use helix_view::document::Mode;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -12,7 +12,7 @@ use toml::de::Error as TomlError;
 pub struct Config {
     pub theme: Option<String>,
     #[serde(default = "default")]
-    pub keys: HashMap<Mode, Keymap>,
+    pub keys: HashMap<KeyMode, Keymap>,
     #[serde(default)]
     pub editor: helix_view::editor::Config,
 }
@@ -81,11 +81,11 @@ mod tests {
             toml::from_str::<Config>(sample_keymaps).unwrap(),
             Config {
                 keys: hashmap! {
-                    Mode::Insert => Keymap::new(keymap!({ "Insert mode"
+                    KeyMode::Mode(Mode::Insert) => Keymap::new(keymap!({ "Insert mode"
                         "y" => move_line_down,
                         "S-C-a" => delete_selection,
                     })),
-                    Mode::Normal => Keymap::new(keymap!({ "Normal mode"
+                    KeyMode::Mode(Mode::Normal) => Keymap::new(keymap!({ "Normal mode"
                         "A-F12" => move_next_word_end,
                     })),
                 },
