@@ -324,6 +324,7 @@ pub struct Picker<T: Item> {
     show_preview: bool,
 
     callback_fn: Box<dyn Fn(&mut Context, &T, Action)>,
+    populate_options_fn: Option<Box<dyn FnMut(&mut Vec<T>)>>,
 }
 
 impl<T: Item> Picker<T> {
@@ -351,6 +352,7 @@ impl<T: Item> Picker<T> {
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             completion_height: 0,
+            populate_options_fn: None,
         };
 
         // scoring on empty input:

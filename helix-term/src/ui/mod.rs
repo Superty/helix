@@ -191,29 +191,27 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
         .expect("failed to build excluded_types");
     walk_builder.types(excluded_types);
 
-    // We want files along with their modification date for sorting
-    let files = walk_builder.build().filter_map(|entry| {
-        let entry = entry.ok()?;
-
-        // This is faster than entry.path().is_dir() since it uses cached fs::Metadata fetched by ignore/walkdir
-        let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
-        if is_dir {
-            // Will give a false positive if metadata cannot be read (eg. permission error)
-            None
-        } else {
-            Some(entry.into_path())
+    let mut files = Vec::<PathBuf>::new();
+    walk_builder.build().for_each(|entry| {
+        if let Ok(entry) = entry {
+            // This is faster than entry.path().is_dir() since it uses cached fs::Metadata fetched by ignore/walkdir
+            let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+            if !is_dir {
+                // Will give a false positive if metadata cannot be read (eg. permission error)
+                files.push(entry.into_path());
+            }
         }
     });
 
     // Cap the number of files if we aren't in a git project, preventing
     // hangs when using the picker in your home directory
-    let files: Vec<_> = if root.join(".git").is_dir() {
-        files.collect()
-    } else {
-        // const MAX: usize = 8192;
-        const MAX: usize = 100_000;
-        files.take(MAX).collect()
-    };
+    // files = if root.join(".git").is_dir() {
+    //     files.collect()
+    // } else {
+    //     // const MAX: usize = 8192;
+    //     const MAX: usize = 100_000;
+    //     files.take(MAX).collect()
+    // };
 
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
