@@ -74,7 +74,7 @@ fn thread_picker(
 
             let thread_states = debugger.thread_states.clone();
             let picker = FilePicker::new(
-                threads,
+                threads.into(),
                 thread_states,
                 move |cx, thread, _action| callback_fn(cx.editor, thread),
                 move |editor, thread| {
@@ -268,7 +268,7 @@ pub fn dap_launch(cx: &mut Context) {
     let templates = config.templates.clone();
 
     cx.push_layer(Box::new(overlayed(Picker::new(
-        templates,
+        templates.into(),
         (),
         |cx, template, _action| {
             let completions = template.completion.clone();
@@ -677,7 +677,7 @@ pub fn dap_switch_stack_frame(cx: &mut Context) {
     let frames = debugger.stack_frames[&thread_id].clone();
 
     let picker = FilePicker::new(
-        frames,
+        frames.into(),
         (),
         move |cx, frame, _action| {
             let debugger = debugger!(cx.editor);

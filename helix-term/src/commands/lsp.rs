@@ -199,7 +199,7 @@ fn sym_picker(
 ) -> FilePicker<lsp::SymbolInformation> {
     // TODO: drop current_path comparison and instead use workspace: bool flag?
     FilePicker::new(
-        symbols,
+        symbols.into(),
         current_path.clone(),
         move |cx, symbol, action| {
             let (view, doc) = current!(cx.editor);
@@ -275,7 +275,7 @@ fn diag_picker(
     };
 
     FilePicker::new(
-        flat_diag,
+        flat_diag.into(),
         (styles, format),
         move |cx, PickerDiagnostic { url, diag }, action| {
             if current_path.as_ref() == Some(url) {
@@ -704,7 +704,7 @@ fn goto_impl(
         }
         _locations => {
             let picker = FilePicker::new(
-                locations,
+                locations.into(),
                 cwdir,
                 move |cx, location, action| {
                     jump_to_location(cx.editor, location, offset_encoding, action)

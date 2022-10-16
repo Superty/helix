@@ -3,6 +3,9 @@ use crate::{
     ctrl, key, shift,
     ui::{self, fuzzy_match::FuzzyQuery, EditorView},
 };
+use futures_util::{stream::FusedStream, Stream};
+use tokio::{stream, sync::mpsc::UnboundedReceiver};
+use tokio_stream::StreamExt;
 use tui::{
     buffer::Buffer as Surface,
     widgets::{Block, BorderType, Borders},
@@ -36,7 +39,7 @@ pub const MAX_FILE_SIZE_FOR_PREVIEW: u64 = 10 * 1024 * 1024;
 /// File path and range of lines (used to align and highlight lines)
 pub type FileLocation = (PathBuf, Option<(usize, usize)>);
 
-pub struct FilePicker<T: Item> {
+pub struct FilePicker<T: Item + 'static> {
     picker: Picker<T>,
     pub truncate_start: bool,
     /// Caches paths to documents
@@ -83,9 +86,9 @@ impl Preview<'_, '_> {
     }
 }
 
-impl<T: Item> FilePicker<T> {
+impl<T: Item + 'static> FilePicker<T> {
     pub fn new(
-        options: Vec<T>,
+        options: CollectingReceiver<T>,
         editor_data: T::Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
         preview_fn: impl Fn(&Editor, &T) -> Option<FileLocation> + 'static,
@@ -102,6 +105,21 @@ impl<T: Item> FilePicker<T> {
             file_fn: Box::new(preview_fn),
         }
     }
+
+    // pub fn new(
+    //     options: Vec<T>,
+    //     editor_data: T::Data,
+    //     callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
+    //     preview_fn: impl Fn(&Editor, &T) -> Option<FileLocation> + 'static,
+    // ) -> Self {
+    //     Self::new_with_stream(
+    //         options,
+    //         tokio_stream::empty(),
+    //         editor_data,
+    //         callback_fn,
+    //         preview_fn,
+    //     )
+    // }
 
     pub fn truncate_start(mut self, truncate_start: bool) -> Self {
         self.truncate_start = truncate_start;
@@ -303,8 +321,86 @@ impl<T: Item + 'static> Component for FilePicker<T> {
     }
 }
 
-pub struct Picker<T: Item> {
-    options: Vec<T>,
+pub struct CollectingReceiver<T: 'static> {
+    collected: Vec<T>,
+    stream: Option<UnboundedReceiver<T>>,
+}
+
+impl<T: 'static> CollectingReceiver<T> {
+    pub fn new(recv: UnboundedReceiver<T>) -> Self {
+        CollectingReceiver {
+            collected: vec![],
+            stream: Some(recv),
+        }
+    }
+    pub fn collect_from_stream(&mut self) {
+        // TODO: why is this &mut needed?
+        if let Some(stream) = &mut self.stream {
+            while let Ok(x) = stream.try_recv() {
+                self.collected.push(x);
+            }
+        }
+    }
+    pub fn iter(&mut self) -> CollectingRecvIter<T> {
+        self.into_iter()
+    }
+    pub fn get(&self, idx: usize) -> Option<&T> {
+        self.collected.get(idx)
+    }
+}
+
+impl<T: 'static> FromIterator<T> for CollectingReceiver<T> {
+    fn from_iter<IterT>(iter: IterT) -> Self
+    where
+        IterT: IntoIterator<Item = T>,
+    {
+        CollectingReceiver {
+            collected: Vec::<T>::from_iter(iter),
+            stream: None,
+        }
+    }
+}
+
+impl<T: 'static, C> From<C> for CollectingReceiver<T>
+where
+    C: IntoIterator<Item = T>,
+{
+    fn from(iterable: C) -> Self {
+        Self::from_iter(iterable.into_iter())
+    }
+}
+
+pub struct CollectingRecvIter<'a, T: 'static> {
+    stream: &'a CollectingReceiver<T>,
+    idx: usize,
+}
+
+impl<'a, T: 'static> Iterator for CollectingRecvIter<'a, T> {
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = self.stream.collected.get(self.idx);
+        if result.is_some() {
+            self.idx += 1;
+        }
+        result
+    }
+}
+
+impl<'a, T: 'static> IntoIterator for &'a mut CollectingReceiver<T> {
+    type Item = &'a T;
+    type IntoIter = CollectingRecvIter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.collect_from_stream();
+        Self::IntoIter {
+            stream: self,
+            idx: 0,
+        }
+    }
+}
+
+pub struct Picker<T: Item + 'static> {
+    options: CollectingReceiver<T>,
     editor_data: T::Data,
     // filter: String,
     matcher: Box<Matcher>,
@@ -324,12 +420,11 @@ pub struct Picker<T: Item> {
     show_preview: bool,
 
     callback_fn: Box<dyn Fn(&mut Context, &T, Action)>,
-    populate_options_fn: Option<Box<dyn FnMut(&mut Vec<T>)>>,
 }
 
-impl<T: Item> Picker<T> {
+impl<T: Item + 'static> Picker<T> {
     pub fn new(
-        options: Vec<T>,
+        options: CollectingReceiver<T>,
         editor_data: T::Data,
         callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
     ) -> Self {
@@ -352,8 +447,9 @@ impl<T: Item> Picker<T> {
             show_preview: true,
             callback_fn: Box::new(callback_fn),
             completion_height: 0,
-            populate_options_fn: None,
         };
+
+        picker.options.collect_from_stream();
 
         // scoring on empty input:
         // TODO: just reuse score()
@@ -368,6 +464,14 @@ impl<T: Item> Picker<T> {
         picker
     }
 
+    // pub fn new(
+    //     options: Vec<T>,
+    //     editor_data: T::Data,
+    //     callback_fn: impl Fn(&mut Context, &T, Action) + 'static,
+    // ) -> Self {
+    //     Picker::new_with_stream(options, tokio_stream::empty(), editor_data, callback_fn)
+    // }
+
     pub fn score(&mut self) {
         let now = Instant::now();
 
@@ -376,6 +480,8 @@ impl<T: Item> Picker<T> {
         if pattern == &self.previous_pattern {
             return;
         }
+
+        self.options.collect_from_stream();
 
         if pattern.is_empty() {
             // Fast path for no pattern.
@@ -391,7 +497,7 @@ impl<T: Item> Picker<T> {
             // optimization: if the pattern is a more specific version of the previous one
             // then we can score the filtered set.
             self.matches.retain_mut(|(index, score)| {
-                let option = &self.options[*index];
+                let option = &self.options.collected[*index];
                 let text = option.sort_text(&self.editor_data);
 
                 match query.fuzzy_match(&text, &self.matcher) {
@@ -474,7 +580,7 @@ impl<T: Item> Picker<T> {
     pub fn selection(&self) -> Option<&T> {
         self.matches
             .get(self.cursor)
-            .map(|(index, _score)| &self.options[*index])
+            .map(|(index, _score)| &self.options.collected[*index])
     }
 
     pub fn toggle_preview(&mut self) {
@@ -590,7 +696,8 @@ impl<T: Item + 'static> Component for Picker<T> {
 
         let area = inner.clip_left(1).with_height(1);
 
-        let count = format!("{}/{}", self.matches.len(), self.options.len());
+        self.options.collect_from_stream();
+        let count = format!("{}/{}", self.matches.len(), self.options.collected.len());
         surface.set_stringn(
             (area.x + area.width).saturating_sub(count.len() as u16 + 1),
             area.y,
@@ -621,7 +728,7 @@ impl<T: Item + 'static> Component for Picker<T> {
             .matches
             .iter()
             .skip(offset)
-            .map(|(index, _score)| (*index, self.options.get(*index).unwrap()));
+            .map(|(index, _score)| (*index, &self.options.collected[*index]));
 
         for (i, (_index, option)) in files.take(rows as usize).enumerate() {
             let is_active = i == (self.cursor - offset);

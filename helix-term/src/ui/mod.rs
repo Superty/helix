@@ -15,8 +15,10 @@ mod text;
 
 use crate::compositor::{Component, Compositor};
 use crate::job;
+use crate::ui::picker::CollectingReceiver;
 pub use completion::Completion;
 pub use editor::EditorView;
+use ignore::{DirEntry, Error, WalkState};
 pub use markdown::Markdown;
 pub use menu::Menu;
 pub use picker::{FileLocation, FilePicker, Picker};
@@ -28,6 +30,9 @@ pub use text::Text;
 use helix_core::regex::Regex;
 use helix_core::regex::RegexBuilder;
 use helix_view::Editor;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_stream::StreamExt;
 
 use std::path::PathBuf;
 
@@ -191,32 +196,56 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
         .expect("failed to build excluded_types");
     walk_builder.types(excluded_types);
 
-    let mut files = Vec::<PathBuf>::new();
-    walk_builder.build().for_each(|entry| {
-        if let Ok(entry) = entry {
-            // This is faster than entry.path().is_dir() since it uses cached fs::Metadata fetched by ignore/walkdir
-            let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
-            if !is_dir {
-                // Will give a false positive if metadata cannot be read (eg. permission error)
-                files.push(entry.into_path());
-            }
-        }
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        walk_builder.build_parallel().run(move || {
+            let cur_tx = tx.clone();
+            Box::new(move |entry: Result<DirEntry, Error>| {
+                if let Ok(entry) = entry {
+                    // This is faster than entry.path().is_dir() since it uses cached fs::Metadata fetched by ignore/walkdir
+                    let is_dir = entry.file_type().map_or(false, |ft| ft.is_dir());
+                    if !is_dir {
+                        let path = entry.clone().into_path();
+                        let display_path = path.display();
+                        log::debug!("trying to send {}", display_path);
+                        // Will give a false positive if metadata cannot be read (eg. permission error)
+                        if cur_tx.send(entry.into_path()).is_err() {
+                            log::debug!("failed!");
+                            return WalkState::Quit;
+                        }
+                        log::debug!("sent {}!", display_path);
+                    }
+                }
+                WalkState::Continue
+            })
+        })
     });
 
-    // Cap the number of files if we aren't in a git project, preventing
-    // hangs when using the picker in your home directory
-    // files = if root.join(".git").is_dir() {
-    //     files.collect()
-    // } else {
-    //     // const MAX: usize = 8192;
-    //     const MAX: usize = 100_000;
-    //     files.take(MAX).collect()
-    // };
+    log::debug!("here!\n");
+    // let mut files = Vec::<PathBuf>::new();
+
+    // TODO: no shorthand for this pattern?
+    // if !root.join(".git").is_dir() {
+    //     rx_stream = rx_stream.take(100_000);
+    // }
+
+    // while let Some(path) = rx.recv() {
+    //     log::debug!("Recieved {}", path.display());
+    //     if let Some(limit) = max_files {
+    //         // TODO syntax: can't we combine the two ifs?
+    //         if files.len() >= limit {
+    //             log::debug!("Closing!");
+    //             rx.close();
+    //             break;
+    //         }
+    //     }
+    //     files.push(path);
+    // }
 
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
     FilePicker::new(
-        files,
+        CollectingReceiver::new(rx),
         root,
         move |cx, path: &PathBuf, action| {
             if let Err(e) = cx.editor.open(path, action) {

@@ -4,6 +4,7 @@ pub(crate) mod typed;
 
 pub use dap::*;
 pub use lsp::*;
+use tokio::stream;
 use tui::text::Spans;
 pub use typed::*;
 
@@ -1928,7 +1929,7 @@ fn global_search(cx: &mut Context) {
                 }
 
                 let picker = FilePicker::new(
-                    all_matches,
+                    all_matches.into(),
                     current_path,
                     move |cx, FileResult { path, line_num }, action| {
                         match cx.editor.open(path, action) {
@@ -2300,13 +2301,14 @@ fn buffer_picker(cx: &mut Context) {
         is_current: doc.id() == current,
     };
 
-    let picker = FilePicker::new(
+    let picker = FilePicker::<BufferMeta>::new(
         cx.editor
             .documents
             .iter()
             .map(|(_, doc)| new_meta(doc))
             .collect(),
         (),
+        // TODO: Why explicit type annotation required here?
         |cx, meta, action| {
             cx.editor.switch(meta.id, action);
         },
@@ -2452,7 +2454,7 @@ pub fn command_palette(cx: &mut Context) {
                 }
             }));
 
-            let picker = Picker::new(commands, keymap, move |cx, command, _action| {
+            let picker = Picker::new(commands.into(), keymap, move |cx, command, _action| {
                 let mut ctx = Context {
                     register: None,
                     count: std::num::NonZeroUsize::new(1),
