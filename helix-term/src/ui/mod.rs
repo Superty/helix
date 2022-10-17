@@ -13,7 +13,7 @@ mod spinner;
 mod statusline;
 mod text;
 
-use crate::compositor::{Component, Compositor};
+use crate::compositor::{self, Component, Compositor};
 use crate::job;
 use crate::ui::picker::CollectingReceiver;
 pub use completion::Completion;
@@ -161,12 +161,13 @@ pub fn regex_prompt(
     cx.push_layer(Box::new(prompt));
 }
 
-pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePicker<PathBuf> {
+pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<PathBuf> {
     use ignore::{types::TypesBuilder, WalkBuilder};
     use std::time::Instant;
 
     let now = Instant::now();
 
+    let config = &cx.editor.config();
     let mut walk_builder = WalkBuilder::new(&root);
     walk_builder
         .hidden(config.file_picker.hidden)
@@ -197,7 +198,7 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
     walk_builder.types(excluded_types);
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    cx.jobs.spawn(async move {
         walk_builder.build_parallel().run(move || {
             let cur_tx = tx.clone();
             Box::new(move |entry: Result<DirEntry, Error>| {
@@ -207,7 +208,6 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
                     if !is_dir {
                         let path = entry.clone().into_path();
                         let display_path = path.display();
-                        log::debug!("trying to send {}", display_path);
                         // Will give a false positive if metadata cannot be read (eg. permission error)
                         if cur_tx.send(entry.into_path()).is_err() {
                             log::debug!("failed!");
@@ -218,13 +218,13 @@ pub fn file_picker(root: PathBuf, config: &helix_view::editor::Config) -> FilePi
                 }
                 WalkState::Continue
             })
-        })
+        });
+        return Ok(());
     });
 
     log::debug!("here!\n");
     // let mut files = Vec::<PathBuf>::new();
 
-    // TODO: no shorthand for this pattern?
     // if !root.join(".git").is_dir() {
     //     rx_stream = rx_stream.take(100_000);
     // }

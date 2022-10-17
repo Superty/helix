@@ -12,7 +12,7 @@ use serde_json::json;
 use crate::{
     args::Args,
     commands::apply_workspace_edit,
-    compositor::{Compositor, Event},
+    compositor::{self, Compositor, Event},
     config::Config,
     job::Jobs,
     keymap::Keymaps,
@@ -156,6 +156,7 @@ impl Application {
         let editor_view = Box::new(ui::EditorView::new(Keymaps::new(keys)));
         compositor.push(editor_view);
 
+        let mut jobs = Jobs::new();
         if args.load_tutor {
             let path = helix_loader::runtime_dir().join("tutor");
             editor.open(&path, Action::VerticalSplit)?;
@@ -166,7 +167,12 @@ impl Application {
             if first.is_dir() {
                 std::env::set_current_dir(&first).context("set current dir")?;
                 editor.new_file(Action::VerticalSplit);
-                let picker = ui::file_picker(".".into(), &config.load().editor);
+                let mut cx = compositor::Context {
+                    editor: &mut editor,
+                    jobs: &mut jobs,
+                    scroll: None,
+                };
+                let picker = ui::file_picker(".".into(), &mut cx);
                 compositor.push(Box::new(overlayed(picker)));
             } else {
                 let nr_of_files = args.files.len();
@@ -237,7 +243,7 @@ impl Application {
             syn_loader,
 
             signals,
-            jobs: Jobs::new(),
+            jobs,
             lsp_progress: LspProgressMap::new(),
             last_render: Instant::now(),
         };

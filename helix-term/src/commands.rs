@@ -2244,13 +2244,23 @@ fn file_picker(cx: &mut Context) {
     // We don't specify language markers, root will be the root of the current
     // git repo or the current dir if we're not in a repo
     let root = find_root(None, &[]);
-    let picker = ui::file_picker(root, &cx.editor.config());
+    let mut compositor_cx = compositor::Context {
+        jobs: cx.jobs,
+        editor: cx.editor,
+        scroll: None,
+    };
+    let picker = ui::file_picker(root, &mut compositor_cx);
     cx.push_layer(Box::new(overlayed(picker)));
 }
 
 fn file_picker_in_current_directory(cx: &mut Context) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("./"));
-    let picker = ui::file_picker(cwd, &cx.editor.config());
+    let mut compositor_cx = compositor::Context {
+        jobs: cx.jobs,
+        editor: cx.editor,
+        scroll: None,
+    };
+    let picker = ui::file_picker(cwd, &mut compositor_cx);
     cx.push_layer(Box::new(overlayed(picker)));
 }
 
