@@ -83,8 +83,18 @@ pub struct Context<'a> {
 impl<'a> Context<'a> {
     /// Push a new component onto the compositor.
     pub fn push_layer(&mut self, component: Box<dyn Component>) {
-        self.callback = Some(Box::new(|compositor: &mut Compositor, _| {
-            compositor.push(component)
+        self.push_layer_and_then(component, Box::new(|_, _| {}));
+    }
+
+    pub fn push_layer_and_then(
+        &mut self,
+        component: Box<dyn Component>,
+        then: crate::compositor::Callback,
+    ) {
+        self.callback = Some(Box::new(|compositor: &mut Compositor, cx| {
+            compositor.push(component);
+            log::debug!("added layer");
+            then(compositor, cx);
         }));
     }
 
@@ -2249,8 +2259,13 @@ fn file_picker(cx: &mut Context) {
         editor: cx.editor,
         scroll: None,
     };
-    let picker = ui::file_picker(root, &mut compositor_cx);
-    cx.push_layer(Box::new(overlayed(picker)));
+    let (picker, job) = ui::file_picker(root, &mut compositor_cx);
+    cx.push_layer_and_then(
+        Box::new(overlayed(picker)),
+        Box::new(|_, cx: &mut compositor::Context| {
+            cx.jobs.add(job);
+        }),
+    );
 }
 
 fn file_picker_in_current_directory(cx: &mut Context) {
@@ -2260,8 +2275,13 @@ fn file_picker_in_current_directory(cx: &mut Context) {
         editor: cx.editor,
         scroll: None,
     };
-    let picker = ui::file_picker(cwd, &mut compositor_cx);
-    cx.push_layer(Box::new(overlayed(picker)));
+    let (picker, job) = ui::file_picker(cwd, &mut compositor_cx);
+    cx.push_layer_and_then(
+        Box::new(overlayed(picker)),
+        Box::new(|_, cx: &mut compositor::Context| {
+            cx.jobs.add(job);
+        }),
+    );
 }
 
 fn buffer_picker(cx: &mut Context) {

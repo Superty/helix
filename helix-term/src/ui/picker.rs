@@ -127,6 +127,10 @@ impl<T: Item + 'static> FilePicker<T> {
         self
     }
 
+    pub fn add_option(&mut self, item: T) {
+        self.picker.add_option(item);
+    }
+
     fn current_file(&self, editor: &Editor) -> Option<FileLocation> {
         self.picker
             .selection()
@@ -335,17 +339,17 @@ impl<T: 'static> CollectingReceiver<T> {
     }
 
     // Is there a preferred Status enum?
-    pub fn collect_from_stream(&mut self) -> bool {
-        // TODO: why is this &mut needed?
-        let mut changed = false;
-        if let Some(stream) = &mut self.stream {
-            while let Ok(x) = stream.try_recv() {
-                self.collected.push(x);
-                changed = true;
-            }
-        }
-        changed
-    }
+    // pub fn collect_from_stream(&mut self) -> bool {
+    //     // TODO: why is this &mut needed?
+    //     let mut changed = false;
+    //     if let Some(stream) = &mut self.stream {
+    //         while let Ok(x) = stream.try_recv() {
+    //             self.collected.push(x);
+    //             changed = true;
+    //         }
+    //     }
+    //     changed
+    // }
     pub fn iter(&mut self) -> CollectingRecvIter<T> {
         self.into_iter()
     }
@@ -396,7 +400,7 @@ impl<'a, T: 'static> IntoIterator for &'a mut CollectingReceiver<T> {
     type IntoIter = CollectingRecvIter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.collect_from_stream();
+        // self.collect_from_stream();
         Self::IntoIter {
             stream: self,
             idx: 0,
@@ -454,7 +458,7 @@ impl<T: Item + 'static> Picker<T> {
             completion_height: 0,
         };
 
-        picker.options.collect_from_stream();
+        // picker.options.collect_from_stream();
         picker.score_empty();
         picker
     }
@@ -497,13 +501,16 @@ impl<T: Item + 'static> Picker<T> {
             .sort_unstable_by_key(|(_, score)| Reverse(*score));
     }
 
-    pub fn score_after_options_changed(&mut self) {
+    pub fn add_option(&mut self, option: T) {
+        self.options.collected.push(option);
         if self.prompt.line().is_empty() {
             self.score_empty();
         } else {
             self.score_full();
         }
     }
+
+    pub fn score_after_options_changed(&mut self) {}
 
     pub fn score(&mut self) {
         let now = Instant::now();
@@ -706,9 +713,9 @@ impl<T: Item + 'static> Component for Picker<T> {
 
         let area = inner.clip_left(1).with_height(1);
 
-        if self.options.collect_from_stream() {
-            self.score_after_options_changed()
-        }
+        // if self.options.collect_from_stream() {
+        //     self.score_after_options_changed()
+        // }
         let count = format!("{}/{}", self.matches.len(), self.options.collected.len());
         surface.set_stringn(
             (area.x + area.width).saturating_sub(count.len() as u16 + 1),

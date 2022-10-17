@@ -22,6 +22,7 @@ use crate::{
 use log::{error, warn};
 use std::{
     io::{stdin, stdout, Write},
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -172,8 +173,16 @@ impl Application {
                     jobs: &mut jobs,
                     scroll: None,
                 };
-                let picker = ui::file_picker(".".into(), &mut cx);
+                let (picker, job) = ui::file_picker(".".into(), &mut cx);
                 compositor.push(Box::new(overlayed(picker)));
+                log::debug!("Added layer, looking forit now");
+                compositor.dump();
+                if let Some(picker) = compositor.find_overlayed::<ui::FilePicker<PathBuf>>() {
+                    log::debug!("found!");
+                } else {
+                    log::debug!("not found.");
+                }
+                jobs.add(job);
             } else {
                 let nr_of_files = args.files.len();
                 for (i, (file, pos)) in args.files.into_iter().enumerate() {

@@ -14,7 +14,8 @@ mod statusline;
 mod text;
 
 use crate::compositor::{self, Component, Compositor};
-use crate::job;
+use crate::job::{self, Job};
+use crate::ui::overlay::Overlay;
 use crate::ui::picker::CollectingReceiver;
 pub use completion::Completion;
 pub use editor::EditorView;
@@ -161,7 +162,10 @@ pub fn regex_prompt(
     cx.push_layer(Box::new(prompt));
 }
 
-pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<PathBuf> {
+// The Job must be added to the jobs list AFTER the FilePicker is added to the compositor.
+
+// TODO: take command:Context and directly add a callback instead.
+pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> (FilePicker<PathBuf>, Job) {
     use ignore::{types::TypesBuilder, WalkBuilder};
     use std::time::Instant;
 
@@ -213,7 +217,7 @@ pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<Pa
                             log::debug!("failed!");
                             return WalkState::Quit;
                         }
-                        log::debug!("sent {}!", display_path);
+                        // log::debug!("sent {}!", display_path);
                     }
                 }
                 WalkState::Continue
@@ -225,6 +229,37 @@ pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<Pa
     log::debug!("here!\n");
     // let mut files = Vec::<PathBuf>::new();
 
+    let mut rx_stream = UnboundedReceiverStream::new(rx);
+    // rx_stream.map(|item| Ok(|editor, compositor| println!("wow"); ))
+    let job = Job::with_callback(async move {
+        log::debug!("in callback");
+        if let Some(item) = rx_stream.next().await {
+            let display_path = item.display();
+            log::debug!("got {}", display_path);
+            let call: job::Callback =
+                Box::new(move |editor: &mut Editor, compositor: &mut Compositor| {
+                    log::debug!("look for component filepicker...");
+                    if let Some(Overlay {
+                        content: picker, ..
+                    }) = compositor.find_overlayed::<FilePicker<PathBuf>>()
+                    {
+                        log::debug!("found!");
+                        picker.add_option(item);
+                    } else {
+                        log::debug!("not found :(");
+                    }
+                });
+            Ok(call)
+        } else {
+            let call: job::Callback =
+                Box::new(move |editor: &mut Editor, compositor: &mut Compositor| {});
+            Ok(call)
+        }
+    });
+    // let callback = move |_, cx: &mut compositor::Context| {
+    //     cx.jobs.callback(job);
+    // };
+
     // if !root.join(".git").is_dir() {
     //     rx_stream = rx_stream.take(100_000);
     // }
@@ -232,7 +267,7 @@ pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<Pa
     // while let Some(path) = rx.recv() {
     //     log::debug!("Recieved {}", path.display());
     //     if let Some(limit) = max_files {
-    //         // TODO syntax: can't we combine the two ifs?
+    //         // TODO syntax: can't we combine the() two ifs?
     //         if files.len() >= limit {
     //             log::debug!("Closing!");
     //             rx.close();
@@ -244,8 +279,8 @@ pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<Pa
 
     log::debug!("file_picker init {:?}", Instant::now().duration_since(now));
 
-    FilePicker::new(
-        CollectingReceiver::new(rx),
+    let picker = FilePicker::new(
+        vec![].into(),
         root,
         move |cx, path: &PathBuf, action| {
             if let Err(e) = cx.editor.open(path, action) {
@@ -258,7 +293,8 @@ pub fn file_picker(root: PathBuf, cx: &mut compositor::Context) -> FilePicker<Pa
             }
         },
         |_editor, path| Some((path.clone(), None)),
-    )
+    );
+    (picker, job)
 }
 
 pub mod completers {

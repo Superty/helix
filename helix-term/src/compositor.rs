@@ -16,7 +16,7 @@ pub enum EventResult {
     Consumed(Option<Callback>),
 }
 
-use crate::job::Jobs;
+use crate::{job::Jobs, ui::overlay::Overlay};
 use helix_view::Editor;
 
 pub use helix_view::input::Event;
@@ -229,12 +229,24 @@ impl Compositor {
             .any(|component| component.type_name() == type_name)
     }
 
+    pub fn dump(&mut self) {
+        self.layers
+            .iter_mut()
+            .for_each(|comp| log::debug!("{}", comp.type_name()));
+        // .find(|component| component.type_name() == type_name)
+    }
+
     pub fn find<T: 'static>(&mut self) -> Option<&mut T> {
         let type_name = std::any::type_name::<T>();
+        log::debug!("looking for {}", type_name);
         self.layers
             .iter_mut()
             .find(|component| component.type_name() == type_name)
             .and_then(|component| component.as_any_mut().downcast_mut())
+    }
+
+    pub fn find_overlayed<T: 'static>(&mut self) -> Option<&mut Overlay<T>> {
+        self.find::<Overlay<T>>()
     }
 
     pub fn find_id<T: 'static>(&mut self, id: &'static str) -> Option<&mut T> {
