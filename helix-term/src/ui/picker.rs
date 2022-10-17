@@ -684,6 +684,7 @@ impl<T: Item + 'static> Component for Picker<T> {
     }
 
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        log::debug!("rendering");
         let text_style = cx.editor.theme.get("ui.text");
         let selected = cx.editor.theme.get("ui.text.focus");
         let highlighted = cx.editor.theme.get("special").add_modifier(Modifier::BOLD);
