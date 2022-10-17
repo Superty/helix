@@ -333,13 +333,18 @@ impl<T: 'static> CollectingReceiver<T> {
             stream: Some(recv),
         }
     }
-    pub fn collect_from_stream(&mut self) {
+
+    // Is there a preferred Status enum?
+    pub fn collect_from_stream(&mut self) -> bool {
         // TODO: why is this &mut needed?
+        let mut changed = false;
         if let Some(stream) = &mut self.stream {
             while let Ok(x) = stream.try_recv() {
                 self.collected.push(x);
+                changed = true;
             }
         }
+        changed
     }
     pub fn iter(&mut self) -> CollectingRecvIter<T> {
         self.into_iter()
@@ -450,17 +455,7 @@ impl<T: Item + 'static> Picker<T> {
         };
 
         picker.options.collect_from_stream();
-
-        // scoring on empty input:
-        // TODO: just reuse score()
-        picker.matches.extend(
-            picker
-                .options
-                .iter()
-                .enumerate()
-                .map(|(index, _option)| (index, 0)),
-        );
-
+        picker.score_empty();
         picker
     }
 
@@ -472,28 +467,57 @@ impl<T: Item + 'static> Picker<T> {
     //     Picker::new_with_stream(options, tokio_stream::empty(), editor_data, callback_fn)
     // }
 
+    pub fn score_empty(&mut self) {
+        // Fast path for no pattern.
+        self.matches.clear();
+        self.matches.extend(
+            self.options
+                .iter()
+                .enumerate()
+                .map(|(index, _option)| (index, 0)),
+        );
+    }
+    pub fn score_full(&mut self) {
+        let pattern = self.prompt.line();
+        let query = FuzzyQuery::new(pattern);
+        self.matches.clear();
+        self.matches.extend(
+            self.options
+                .iter()
+                .enumerate()
+                .filter_map(|(index, option)| {
+                    let text = option.filter_text(&self.editor_data);
+
+                    query
+                        .fuzzy_match(&text, &self.matcher)
+                        .map(|score| (index, score))
+                }),
+        );
+        self.matches
+            .sort_unstable_by_key(|(_, score)| Reverse(*score));
+    }
+
+    pub fn score_after_options_changed(&mut self) {
+        if self.prompt.line().is_empty() {
+            self.score_empty();
+        } else {
+            self.score_full();
+        }
+    }
+
     pub fn score(&mut self) {
         let now = Instant::now();
 
-        let pattern = self.prompt.line();
+        let pattern = self.prompt.line().to_owned();
 
-        if pattern == &self.previous_pattern {
+        if &pattern == &self.previous_pattern {
             return;
         }
 
-        self.options.collect_from_stream();
-
         if pattern.is_empty() {
-            // Fast path for no pattern.
-            self.matches.clear();
-            self.matches.extend(
-                self.options
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _option)| (index, 0)),
-            );
+            self.score_empty();
         } else if pattern.starts_with(&self.previous_pattern) {
-            let query = FuzzyQuery::new(pattern);
+            let query = FuzzyQuery::new(&pattern);
             // optimization: if the pattern is a more specific version of the previous one
             // then we can score the filtered set.
             self.matches.retain_mut(|(index, score)| {
@@ -513,29 +537,14 @@ impl<T: Item + 'static> Picker<T> {
             self.matches
                 .sort_unstable_by_key(|(_, score)| Reverse(*score));
         } else {
-            let query = FuzzyQuery::new(pattern);
-            self.matches.clear();
-            self.matches.extend(
-                self.options
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, option)| {
-                        let text = option.filter_text(&self.editor_data);
-
-                        query
-                            .fuzzy_match(&text, &self.matcher)
-                            .map(|score| (index, score))
-                    }),
-            );
-            self.matches
-                .sort_unstable_by_key(|(_, score)| Reverse(*score));
+            self.score_full();
         }
 
         log::debug!("picker score {:?}", Instant::now().duration_since(now));
 
         // reset cursor position
         self.cursor = 0;
-        self.previous_pattern.clone_from(pattern);
+        self.previous_pattern = pattern;
     }
 
     /// Move the cursor by a number of lines, either down (`Forward`) or up (`Backward`)
@@ -696,7 +705,9 @@ impl<T: Item + 'static> Component for Picker<T> {
 
         let area = inner.clip_left(1).with_height(1);
 
-        self.options.collect_from_stream();
+        if self.options.collect_from_stream() {
+            self.score_after_options_changed()
+        }
         let count = format!("{}/{}", self.matches.len(), self.options.collected.len());
         surface.set_stringn(
             (area.x + area.width).saturating_sub(count.len() as u16 + 1),
