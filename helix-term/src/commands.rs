@@ -17,7 +17,7 @@ pub use typed::*;
 use helix_core::{
     char_idx_at_visual_offset,
     chars::char_is_word,
-    comment,
+    comment, diagnostic,
     doc_formatter::TextFormat,
     encoding, find_workspace,
     graphemes::{self, next_grapheme_boundary, RevRopeGraphemes},
@@ -416,6 +416,8 @@ impl MappableCommand {
         goto_last_diag, "Goto last diagnostic",
         goto_next_diag, "Goto next diagnostic",
         goto_prev_diag, "Goto previous diagnostic",
+        goto_next_error, "Goto next error",
+        goto_prev_error, "Goto previous error",
         goto_next_change, "Goto next change",
         goto_prev_change, "Goto previous change",
         goto_first_change, "Goto first change",
@@ -3658,7 +3660,7 @@ fn goto_last_diag(cx: &mut Context) {
         .immediately_show_diagnostic(doc, view.id);
 }
 
-fn goto_next_diag(cx: &mut Context) {
+fn goto_next_diag_with_severity(cx: &mut Context, min_severity: diagnostic::Severity) {
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
 
@@ -3667,11 +3669,17 @@ fn goto_next_diag(cx: &mut Context) {
             .primary()
             .cursor(doc.text().slice(..));
 
-        let diag = doc
+        let mut relevant_diags = doc
             .diagnostics()
             .iter()
+            .filter(|diag| diag.severity() >= min_severity)
+            .peekable();
+
+        let first_relevant_diag_in_doc = relevant_diags.peek().copied();
+
+        let diag = relevant_diags
             .find(|diag| diag.range.start > cursor_pos)
-            .or_else(|| doc.diagnostics().first());
+            .or_else(|| first_relevant_diag_in_doc);
 
         let selection = match diag {
             Some(diag) => Selection::single(diag.range.start, diag.range.end),
@@ -3685,7 +3693,7 @@ fn goto_next_diag(cx: &mut Context) {
     cx.editor.apply_motion(motion);
 }
 
-fn goto_prev_diag(cx: &mut Context) {
+fn goto_prev_diag_with_severity(cx: &mut Context, min_severity: diagnostic::Severity) {
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
 
@@ -3694,12 +3702,18 @@ fn goto_prev_diag(cx: &mut Context) {
             .primary()
             .cursor(doc.text().slice(..));
 
-        let diag = doc
+        let mut reversed_relevant_diags = doc
             .diagnostics()
             .iter()
             .rev()
+            .filter(|diag| diag.severity() >= min_severity)
+            .peekable();
+
+        let last_relevant_diag_in_doc = reversed_relevant_diags.peek().copied();
+
+        let diag = reversed_relevant_diags
             .find(|diag| diag.range.start < cursor_pos)
-            .or_else(|| doc.diagnostics().last());
+            .or_else(|| last_relevant_diag_in_doc);
 
         let selection = match diag {
             // NOTE: the selection is reversed because we're jumping to the
@@ -3712,6 +3726,22 @@ fn goto_prev_diag(cx: &mut Context) {
             .immediately_show_diagnostic(doc, view.id);
     };
     cx.editor.apply_motion(motion)
+}
+
+fn goto_prev_diag(cx: &mut Context) {
+    goto_prev_diag_with_severity(cx, diagnostic::Severity::Info);
+}
+
+fn goto_next_diag(cx: &mut Context) {
+    goto_next_diag_with_severity(cx, diagnostic::Severity::Info);
+}
+
+fn goto_prev_error(cx: &mut Context) {
+    goto_prev_diag_with_severity(cx, diagnostic::Severity::Error);
+}
+
+fn goto_next_error(cx: &mut Context) {
+    goto_next_diag_with_severity(cx, diagnostic::Severity::Error);
 }
 
 fn goto_first_change(cx: &mut Context) {
